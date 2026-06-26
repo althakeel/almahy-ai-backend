@@ -17,9 +17,36 @@ type HistoryMessage = {
   image?: MessageImage | null;
 };
 
-export async function sendChatMessage(req: ChatRequest) {
+export interface ChatResponse {
+  content: string;
+  messageId: string;
+  image?: MessageImage | null;
+}
+
+function isImageGenerationRequest(message: string): boolean {
+  const text = message.trim().toLowerCase();
+  if (!text) return false;
+
+  const hasAction = /\b(generate|create|draw|make|design|paint|render|produce)\b/.test(text);
+  const hasSubject = /\b(image|picture|photo|illustration|logo|artwork|drawing|portrait|poster|icon|banner)\b/.test(text);
+  const startsWithDraw = /^draw\b/.test(text);
+  const imageOf = /\b(image|picture|photo) of\b/.test(text);
+
+  return (hasAction && hasSubject) || startsWithDraw || imageOf;
+}
+
+export async function sendChatMessage(req: ChatRequest): Promise<ChatResponse> {
   const keys = await getPlatformApiKeys();
   await addMessage(req.conversationId, 'user', req.message, req.image);
+
+  if (req.provider === 'gemini' && !req.image && isImageGenerationRequest(req.message)) {
+    if (!keys.geminiKey) {
+      throw new Error('Almahy AI is not ready yet. The administrator needs to add a Gemini API key.');
+    }
+    const generated = await generateGeminiImage(keys.geminiKey, req.message);
+    const saved = await addMessage(req.conversationId, 'assistant', generated.text, generated.image);
+    return { content: generated.text, messageId: saved.id, image: generated.image };
+  }
 
   const history = (await getMessages(req.conversationId)).filter((m) => m.role !== 'system');
   let responseContent: string;
@@ -41,6 +68,63 @@ export async function sendChatMessage(req: ChatRequest) {
 
   const saved = await addMessage(req.conversationId, 'assistant', responseContent);
   return { content: responseContent, messageId: saved.id };
+}
+
+async function generateGeminiImage(
+  apiKey: string,
+  prompt: string
+): Promise<{ text: string; image: MessageImage | null }> {
+  const ai = new GoogleGenAI({ apiKey });
+  const imageModels = ['gemini-2.5-flash-image', 'gemini-2.0-flash-preview-image-generation'];
+
+  for (const model of imageModels) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: { responseModalities: ['TEXT', 'IMAGE'] },
+      });
+
+      let text = '';
+      let image: MessageImage | null = null;
+
+      for (const part of response.candidates?.[0]?.content?.parts ?? []) {
+        if (part.text) text += part.text;
+        if (part.inlineData?.data) {
+          image = {
+            mimeType: part.inlineData.mimeType ?? 'image/png',
+            data: part.inlineData.data,
+          };
+        }
+      }
+
+      if (image) {
+        return { text: text.trim() || 'Here is your generated image.', image };
+      }
+    } catch {
+      // try next model
+    }
+  }
+
+  try {
+    const response = await ai.models.generateImages({
+      model: 'imagen-4.0-generate-001',
+      prompt,
+      config: { numberOfImages: 1 },
+    });
+
+    const bytes = response.generatedImages?.[0]?.image?.imageBytes;
+    if (bytes) {
+      return {
+        text: 'Here is your generated image.',
+        image: { mimeType: 'image/png', data: bytes },
+      };
+    }
+  } catch (err: unknown) {
+    throw new Error(formatGeminiError(err));
+  }
+
+  throw new Error('Could not generate an image. Try a clearer prompt like "Generate an image of a sunset over mountains".');
 }
 
 async function chatOpenAI(
