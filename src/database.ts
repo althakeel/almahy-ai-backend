@@ -89,12 +89,25 @@ function messages() {
 }
 
 function getEncryptionKey(): Buffer {
+  const fromEnv = process.env.ENCRYPTION_SECRET;
+  if (fromEnv) {
+    return crypto.createHash('sha256').update(fromEnv).digest();
+  }
+
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   const keyPath = path.join(DATA_DIR, '.key');
   if (fs.existsSync(keyPath)) return fs.readFileSync(keyPath);
   const key = crypto.randomBytes(32);
   fs.writeFileSync(keyPath, key);
   return key;
+}
+
+function tryDecrypt(encryptedText: string): string | null {
+  try {
+    return decrypt(encryptedText);
+  } catch {
+    return null;
+  }
 }
 
 function encrypt(text: string): string {
@@ -237,8 +250,8 @@ export async function getPlatformApiKeys(): Promise<ApiKeys> {
   const row = await platformConfig().findOne({ _id: PLATFORM_CONFIG_ID });
   if (row?.openaiKey || row?.geminiKey) {
     keys = {
-      openaiKey: row.openaiKey ? decrypt(row.openaiKey as string) : null,
-      geminiKey: row.geminiKey ? decrypt(row.geminiKey as string) : null,
+      openaiKey: row.openaiKey ? tryDecrypt(row.openaiKey as string) : null,
+      geminiKey: row.geminiKey ? tryDecrypt(row.geminiKey as string) : null,
     };
   } else {
     const adminUser = await users().findOne({ email: ADMIN_EMAIL });
@@ -279,8 +292,8 @@ export async function getApiKeys(userId: string): Promise<ApiKeys> {
   const row = await apiKeys().findOne({ userId });
   if (!row) return { openaiKey: null, geminiKey: null };
   return {
-    openaiKey: row.openaiKey ? decrypt(row.openaiKey as string) : null,
-    geminiKey: row.geminiKey ? decrypt(row.geminiKey as string) : null,
+    openaiKey: row.openaiKey ? tryDecrypt(row.openaiKey as string) : null,
+    geminiKey: row.geminiKey ? tryDecrypt(row.geminiKey as string) : null,
   };
 }
 
