@@ -24,7 +24,7 @@ const PORT = Number(process.env.PORT) || 3847;
 
 const app = express();
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json());
+app.use(express.json({ limit: '12mb' }));
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'almahy-ai-backend', database: 'mongodb' });
@@ -124,13 +124,14 @@ app.get('/api/conversations/:id/messages', requireAuth, async (req, res) => {
 app.post('/api/conversations/:id/chat', requireAuth, async (req, res) => {
   try {
     const isAdmin = isAdminEmail(req.authUser!.email);
-    const { message, provider, model } = req.body;
+    const { message, provider, model, image } = req.body;
     const result = await sendChatMessage({
       userId: req.authUser!.uid,
       conversationId: req.params.id,
-      message,
+      message: (message as string) ?? '',
       provider: isAdmin ? provider : DEFAULT_CHAT_PROVIDER,
       model: isAdmin ? model : DEFAULT_CHAT_MODEL,
+      image: image ?? null,
     });
     res.json({ success: true, ...result });
   } catch (err: unknown) {

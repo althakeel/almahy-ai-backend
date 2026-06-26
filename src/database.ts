@@ -41,7 +41,13 @@ export interface Message {
   conversationId: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
+  image?: MessageImage | null;
   createdAt: string;
+}
+
+export interface MessageImage {
+  mimeType: string;
+  data: string;
 }
 
 export interface ApiKeys {
@@ -369,6 +375,7 @@ export async function getMessages(conversationId: string): Promise<Message[]> {
     conversationId: r.conversationId as string,
     role: r.role as 'user' | 'assistant' | 'system',
     content: r.content as string,
+    image: (r.image as MessageImage | undefined) ?? null,
     createdAt: r.createdAt as string,
   }));
 }
@@ -376,11 +383,14 @@ export async function getMessages(conversationId: string): Promise<Message[]> {
 export async function addMessage(
   conversationId: string,
   role: 'user' | 'assistant' | 'system',
-  content: string
+  content: string,
+  image?: MessageImage | null
 ): Promise<Message> {
   const id = uuidv4();
   const now = new Date().toISOString();
-  await messages().insertOne({ _id: id, conversationId, role, content, createdAt: now });
+  const doc: Record<string, unknown> = { _id: id, conversationId, role, content, createdAt: now };
+  if (image) doc.image = image;
+  await messages().insertOne(doc);
   await conversations().updateOne({ _id: conversationId }, { $set: { updatedAt: now } });
-  return { id, conversationId, role, content, createdAt: now };
+  return { id, conversationId, role, content, image: image ?? null, createdAt: now };
 }

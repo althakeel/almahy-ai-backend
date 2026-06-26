@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { GoogleGenAI } from '@google/genai';
-import { getPlatformApiKeys, getMessages, addMessage } from './database';
+import { getPlatformApiKeys, getMessages, addMessage, type MessageImage } from './database';
 
 export interface ChatRequest {
   userId: string;
@@ -8,16 +8,26 @@ export interface ChatRequest {
   message: string;
   provider: 'openai' | 'gemini';
   model: string;
+  image?: MessageImage | null;
 }
+
+type HistoryMessage = {
+  role: string;
+  content: string;
+  image?: MessageImage | null;
+};
 
 export async function sendChatMessage(req: ChatRequest) {
   const keys = await getPlatformApiKeys();
-  await addMessage(req.conversationId, 'user', req.message);
+  await addMessage(req.conversationId, 'user', req.message, req.image);
 
   const history = (await getMessages(req.conversationId)).filter((m) => m.role !== 'system');
   let responseContent: string;
 
   if (req.provider === 'openai') {
+    if (req.image) {
+      throw new Error('Image messages are only supported with Gemini.');
+    }
     if (!keys.openaiKey) {
       throw new Error('Almahy AI is not ready yet. The administrator needs to add an OpenAI API key.');
     }
@@ -36,7 +46,7 @@ export async function sendChatMessage(req: ChatRequest) {
 async function chatOpenAI(
   apiKey: string,
   model: string,
-  messages: Array<{ role: string; content: string }>
+  messages: HistoryMessage[]
 ): Promise<string> {
   const client = new OpenAI({ apiKey });
   const response = await client.chat.completions.create({
@@ -49,15 +59,34 @@ async function chatOpenAI(
   return response.choices[0]?.message?.content ?? 'No response received.';
 }
 
+function geminiParts(message: HistoryMessage) {
+  const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [];
+  if (message.image) {
+    parts.push({
+      inlineData: {
+        mimeType: message.image.mimeType,
+        data: message.image.data,
+      },
+    });
+  }
+  if (message.content.trim()) {
+    parts.push({ text: message.content });
+  }
+  if (parts.length === 0) {
+    parts.push({ text: 'Describe this image.' });
+  }
+  return parts;
+}
+
 async function chatGemini(
   apiKey: string,
   model: string,
-  messages: Array<{ role: string; content: string }>
+  messages: HistoryMessage[]
 ): Promise<string> {
   const ai = new GoogleGenAI({ apiKey });
   const contents = messages.map((m) => ({
     role: m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }],
+    parts: geminiParts(m),
   }));
   const response = await ai.models.generateContent({ model, contents });
   return response.text ?? 'No response received.';
